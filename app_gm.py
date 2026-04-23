@@ -46,6 +46,204 @@ class MagazynApp:
         self.create_przyjecia_tab()
         self.create_wydania_tab()
         self.create_kartoteka_tab()
+        self.create_stan_zapasu_tab()
+        self.create_inwentaryzacja_tab()
+
+    def create_inwentaryzacja_tab(self):
+        self.inwentaryzacja_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.inwentaryzacja_frame, text="Inwentaryzacja")
+
+        form_frame = ttk.LabelFrame(self.inwentaryzacja_frame, text="Nowy wpis inwentaryzacyjny", padding=10)
+        form_frame.pack(fill="x", padx=10, pady=10)
+
+        ttk.Label(form_frame, text="Produkt i Lokalizacja").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.inv_prod_loc_combo = ttk.Combobox(form_frame, state="readonly", width=60)
+        self.inv_prod_loc_combo.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Ilość rzeczywista").grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.inv_ilosc_entry = ttk.Entry(form_frame, width=20)
+        self.inv_ilosc_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Pracownik").grid(row=2, column=0, sticky="w", padx=5, pady=5)
+        self.inv_pracownik_combo = ttk.Combobox(form_frame, state="readonly", width=40)
+        self.inv_pracownik_combo.grid(row=2, column=1, sticky="w", padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Uwagi").grid(row=3, column=0, sticky="nw", padx=5, pady=5)
+        self.inv_uwagi_entry = ttk.Entry(form_frame, width=60)
+        self.inv_uwagi_entry.grid(row=3, column=1, padx=5, pady=5)
+
+        ttk.Button(form_frame, text="Zapisz inwentaryzację", command=self.save_inwentaryzacja).grid(row=4, column=1, pady=10, sticky="e")
+
+        table_frame = ttk.LabelFrame(self.inwentaryzacja_frame, text="Historia inwentaryzacji", padding=10)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        cols = ("Data", "Produkt", "Lokalizacja", "Systemowa", "Rzeczywista", "Różnica", "Pracownik", "Status")
+        self.inv_tree = ttk.Treeview(table_frame, columns=cols, show="headings")
+        for col in cols:
+            self.inv_tree.heading(col, text=col)
+            self.inv_tree.column(col, width=100)
+        self.inv_tree.pack(fill="both", expand=True)
+
+        self.load_inventory_data()
+        self.refresh_inwentaryzacja()
+
+    def load_inventory_data(self):
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Load products/locations for combo
+        sql = """
+            SELECT pl.id_produktu_lokalizacji, m.Nazwa, mag.Kod, lm.strefa, lm.regal, lm.polka, pl.ilosc
+            FROM ProduktyLokalizacje pl
+            JOIN Materialy m ON pl.id_produktu = m.MaterialID
+            JOIN LokalizacjeMagazynowe lm ON pl.id_lokalizacji = lm.id_lokalizacji
+            JOIN Magazyny mag ON lm.MagazynID = mag.MagazynID
+        """
+        cursor.execute(sql)
+        self.inv_prod_loc_dict = {}
+        values = []
+        for row in cursor.fetchall():
+            label = f"{row[1]} (Mag: {row[2]}, Lok: {row[3]} {row[4]}-{row[5]}) [Stan: {row[6]}]"
+            self.inv_prod_loc_dict[label] = {
+                "id_pl": row[0],
+                "system_qty": row[6],
+                "material_id": None, # Will fetch if needed
+                "location_id": None  # Will fetch if needed
+            }
+            # Need actual IDs from schema
+            cursor2 = conn.cursor()
+            cursor2.execute("SELECT id_produktu, id_lokalizacji FROM ProduktyLokalizacje WHERE id_produktu_lokalizacji=?", (row[0],))
+            ids = cursor2.fetchone()
+            self.inv_prod_loc_dict[label]["material_id"] = ids[0]
+            self.inv_prod_loc_dict[label]["location_id"] = ids[1]
+            values.append(label)
+        self.inv_prod_loc_combo["values"] = values
+
+        # Load workers
+        cursor.execute("SELECT id_pracownika, imie, nazwisko FROM Pracownicy")
+        workers = cursor.fetchall()
+        self.pracownicy_dict = {f"{r[1]} {r[2]}": r[0] for r in workers}
+        self.inv_pracownik_combo["values"] = list(self.pracownicy_dict.keys())
+
+        conn.close()
+
+    def save_inwentaryzacja(self):
+        try:
+            label = self.inv_prod_loc_combo.get()
+            if not label: raise ValueError("Wybierz produkt i lokalizację.")
+            
+            ilosc_rzecz = int(self.inv_ilosc_entry.get())
+            pracownik_name = self.inv_pracownik_combo.get()
+            if not pracownik_name: raise ValueError("Wybierz pracownika.")
+            
+            data = self.inv_prod_loc_dict[label]
+            pracownik_id = self.pracownicy_dict[pracownik_name]
+            
+            conn = get_connection()
+            cursor = conn.cursor()
+            sql = """
+                INSERT INTO Inwentaryzacja (id_produktu, id_lokalizacji, id_pracownika, data_inwentaryzacji, ilosc_systemowa, ilosc_rzeczywista, status, uwagi)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql, (
+                data["material_id"],
+                data["location_id"],
+                pracownik_id,
+                datetime.now().strftime("%Y-%m-%d"),
+                data["system_qty"],
+                ilosc_rzecz,
+                "Zatwierdzona",
+                self.inv_uwagi_entry.get()
+            ))
+            
+            # Optional: Update the stock to match reality? 
+            # The prompt says "zapis różnic", which the table does via GENERATED column.
+            
+            conn.commit()
+            conn.close()
+            messagebox.showinfo("OK", "Zapisano wynik inwentaryzacji.")
+            self.refresh_inwentaryzacja()
+        except Exception as e:
+            messagebox.showerror("Błąd", str(e))
+
+    def refresh_inwentaryzacja(self):
+        for item in self.inv_tree.get_children():
+            self.inv_tree.delete(item)
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = """
+            SELECT i.data_inwentaryzacji, m.Nazwa, lm.strefa || ' ' || lm.regal, i.ilosc_systemowa, i.ilosc_rzeczywista, i.roznica, p.nazwisko, i.status
+            FROM Inwentaryzacja i
+            JOIN Materialy m ON i.id_produktu = m.MaterialID
+            JOIN LokalizacjeMagazynowe lm ON i.id_lokalizacji = lm.id_lokalizacji
+            JOIN Pracownicy p ON i.id_pracownika = p.id_pracownika
+            ORDER BY i.data_inwentaryzacji DESC
+        """
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            self.inv_tree.insert("", "end", values=row)
+        conn.close()
+
+    def create_stan_zapasu_tab(self):
+        self.stan_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.stan_frame, text="Aktualny stan zapasu")
+        
+        button_frame = ttk.Frame(self.stan_frame)
+        button_frame.pack(fill="x", padx=10, pady=5)
+        ttk.Button(button_frame, text="Odśwież stan", command=self.refresh_stan_zapasu).pack(side="left")
+
+        cols = ("Materiał", "Magazyn", "Ilość", "Jednostka", "Cena jedn.", "Wartość zapasu", "Lokalizacja")
+        self.stan_tree = ttk.Treeview(self.stan_frame, columns=cols, show="headings")
+        
+        column_widths = {
+            "Materiał": 250,
+            "Magazyn": 80,
+            "Ilość": 70,
+            "Jednostka": 80,
+            "Cena jedn.": 100,
+            "Wartość zapasu": 120,
+            "Lokalizacja": 150
+        }
+
+        for col in cols:
+            self.stan_tree.heading(col, text=col)
+            self.stan_tree.column(col, width=column_widths.get(col, 100), anchor="center" if col != "Materiał" else "w")
+        
+        self.stan_tree.pack(fill="both", expand=True, padx=10, pady=10)
+        self.refresh_stan_zapasu()
+
+    def refresh_stan_zapasu(self):
+        for item in self.stan_tree.get_children():
+            self.stan_tree.delete(item)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = """
+            SELECT 
+                m.Nazwa, 
+                mag.Kod, 
+                pl.ilosc, 
+                m.Jednostka, 
+                m.Cenajedn, 
+                (pl.ilosc * m.Cenajedn) AS Wartosc,
+                COALESCE(lm.strefa || ' ' || lm.regal || '-' || lm.polka || '-' || lm.pozycja, 'Brak') AS Lokalizacja
+            FROM ProduktyLokalizacje pl
+            JOIN Materialy m ON pl.id_produktu = m.MaterialID
+            JOIN LokalizacjeMagazynowe lm ON pl.id_lokalizacji = lm.id_lokalizacji
+            JOIN Magazyny mag ON lm.MagazynID = mag.MagazynID
+            ORDER BY m.Nazwa, mag.Kod
+        """
+        cursor.execute(sql)
+
+        for row in cursor.fetchall():
+            # Format numbers
+            formatted_row = list(row)
+            formatted_row[4] = f"{row[4]:.2f}"
+            formatted_row[5] = f"{row[5]:.2f}"
+            self.stan_tree.insert("", "end", values=formatted_row)
+
+        conn.close()
 
     def create_przyjecia_tab(self):
         self.przyjecia_frame = ttk.Frame(self.notebook)
@@ -177,6 +375,7 @@ class MagazynApp:
             messagebox.showinfo("OK", "Dodano przyjęcie.")
             self.clear_przyjecie_form()
             self.refresh_przyjecia()
+            self.refresh_stan_zapasu()
         except ValueError as e:
             messagebox.showerror("Błąd danych", str(e))
         except sqlite3.Error as e:
