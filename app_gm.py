@@ -135,7 +135,8 @@ class MagazynApp:
             ilosc_rzecz = int(self.inv_ilosc_entry.get())
             pracownik_name = self.inv_pracownik_combo.get()
             if not pracownik_name: raise ValueError("Wybierz pracownika.")
-            
+            if not self.inv_uwagi_entry.get().strip(): raise ValueError("Wprowadź uwagi.")
+
             data = self.inv_prod_loc_dict[label]
             pracownik_id = self.pracownicy_dict[pracownik_name]
             
