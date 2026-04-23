@@ -5,6 +5,8 @@ from pathlib import Path
 import sqlite3
 import sys
 
+# Filtorwanie po magazyn ie i produkcie -> Aktualny stan zapisu
+
 APP_DIR = Path(__file__).resolve().parent
 DBFILE = APP_DIR / "gmsystem.db"
 SQLFILE = APP_DIR / "gm_schema_and_data_extended.sql"
@@ -291,9 +293,23 @@ class MagazynApp:
         self.stan_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.stan_frame, text="Aktualny stan zapasu")
         
-        button_frame = ttk.Frame(self.stan_frame)
-        button_frame.pack(fill="x", padx=15, pady=15)
-        ttk.Button(button_frame, text="Odśwież stan zapasów", command=self.refresh_stan_zapasu).pack(side="left")
+        filter_frame = ttk.LabelFrame(self.stan_frame, text="Filtrowanie", padding=15)
+        filter_frame.pack(fill="x", padx=15, pady=10)
+
+        # Filters row
+        controls_frame = ttk.Frame(filter_frame)
+        controls_frame.pack(fill="x")
+
+        ttk.Label(controls_frame, text="Magazyn:").pack(side="left", padx=(0, 5))
+        self.stan_filter_magazyn = ttk.Combobox(controls_frame, state="readonly", width=15)
+        self.stan_filter_magazyn.pack(side="left", padx=(0, 15))
+
+        ttk.Label(controls_frame, text="Produkt:").pack(side="left", padx=(0, 5))
+        self.stan_filter_produkt = ttk.Entry(controls_frame, width=25)
+        self.stan_filter_produkt.pack(side="left", padx=(0, 15))
+
+        ttk.Button(controls_frame, text="Filtruj", command=self.refresh_stan_zapasu).pack(side="left", padx=(0, 5))
+        ttk.Button(controls_frame, text="Wyczyść", command=self.clear_stan_filters).pack(side="left", padx=(0, 5))
 
         table_frame = ttk.Frame(self.stan_frame)
         table_frame.pack(fill="both", expand=True, padx=15, pady=5)
@@ -311,11 +327,30 @@ class MagazynApp:
             self.stan_tree.column(col, width=column_widths.get(col, 100), anchor="center" if col != "Materiał" else "w")
         
         self.stan_tree.pack(fill="both", expand=True)
+        
+        self.update_stan_filter_combos()
+        self.refresh_stan_zapasu()
+
+    def update_stan_filter_combos(self):
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT Kod FROM Magazyny ORDER BY Kod")
+        magazyny = ["Wszystkie"] + [row[0] for row in cursor.fetchall()]
+        self.stan_filter_magazyn["values"] = magazyny
+        self.stan_filter_magazyn.set("Wszystkie")
+        conn.close()
+
+    def clear_stan_filters(self):
+        self.stan_filter_magazyn.set("Wszystkie")
+        self.stan_filter_produkt.delete(0, tk.END)
         self.refresh_stan_zapasu()
 
     def refresh_stan_zapasu(self):
         for item in self.stan_tree.get_children():
             self.stan_tree.delete(item)
+
+        mag_filter = self.stan_filter_magazyn.get()
+        prod_filter = self.stan_filter_produkt.get().strip()
 
         conn = get_connection()
         cursor = conn.cursor()
@@ -332,9 +367,20 @@ class MagazynApp:
             JOIN Materialy m ON pl.id_produktu = m.MaterialID
             JOIN LokalizacjeMagazynowe lm ON pl.id_lokalizacji = lm.id_lokalizacji
             JOIN Magazyny mag ON lm.MagazynID = mag.MagazynID
-            ORDER BY m.Nazwa, mag.Kod
+            WHERE 1=1
         """
-        cursor.execute(sql)
+        params = []
+        if mag_filter != "Wszystkie":
+            sql += " AND mag.Kod = ?"
+            params.append(mag_filter)
+        
+        if prod_filter:
+            sql += " AND m.Nazwa LIKE ?"
+            params.append(f"%{prod_filter}%")
+
+        sql += " ORDER BY m.Nazwa, mag.Kod"
+        
+        cursor.execute(sql, params)
 
         for row in cursor.fetchall():
             formatted_row = list(row)
