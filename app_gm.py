@@ -147,14 +147,6 @@ class MagazynApp:
         )
         self.title_label.pack(side="left", padx=20, pady=15)
 
-    def create_header(self):
-        self.header_frame = tk.Frame(self.root, height=60)
-        self.header_frame.pack(fill="x", side="top")
-        self.header_frame.pack_propagate(False)
-
-        self.title_label = tk.Label(self.header_frame, text="Gospodarka Magazynowa GM", font=('Segoe UI', 16, 'bold'))
-        self.title_label.pack(side="left", padx=20, pady=15)
-
     def setup_theme(self):
         self.style = ttk.Style(self.root)
         self.style.theme_use('clam')
@@ -257,6 +249,7 @@ class MagazynApp:
         except Exception:
             pass
 
+    # ------------------------------------------------------------------ PRZYJĘCIA
 
     def create_przyjecia_tab(self):
         self.przyjecia_frame = ttk.Frame(self.notebook)
@@ -311,6 +304,81 @@ class MagazynApp:
 
         self.przyjecia_tree.pack(fill="both", expand=True)
 
+    def add_przyjecie(self):
+        try:
+            material_name = self.przyjecia_material_combo.get()
+            magazyn_name = self.przyjecia_magazyn_combo.get()
+
+            if not material_name:
+                messagebox.showerror("Błąd", "Wybierz materiał.")
+                return
+            if not magazyn_name:
+                messagebox.showerror("Błąd", "Wybierz magazyn.")
+                return
+
+            ilosc = int(self.przyjecia_ilosc_entry.get())
+            if ilosc <= 0:
+                raise ValueError("Ilość musi być większa od zera.")
+
+            data = self.przyjecia_data_entry.get().strip()
+            datetime.strptime(data, "%Y-%m-%d")
+
+            material_id = self.materialy_dict[material_name]
+            magazyn_id = self.magazyny_dict[magazyn_name]
+            dostawca = self.przyjecia_dostawca_entry.get().strip()
+            uwagi = self.przyjecia_uwagi_text.get("1.0", "end-1c").strip()
+
+            conn = get_connection()
+            cursor = conn.cursor()
+            sql = (
+                "INSERT INTO OperacjeMagazynowe "
+                "(MaterialID, MagazynID, TypOperacji, Ilo, DataOperacji, Dostawca, ZlecPracownika, Uwagi) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            cursor.execute(sql, (material_id, magazyn_id, "Przyjęcie", ilosc, data, dostawca, None, uwagi))
+            conn.commit()
+            conn.close()
+
+            messagebox.showinfo("Sukces", "Pomyślnie zarejestrowano przyjęcie.")
+            self.clear_przyjecie_form()
+            self.refresh_przyjecia()
+            self.refresh_stan_zapasu()
+        except ValueError as e:
+            messagebox.showerror("Błąd danych", str(e))
+        except sqlite3.Error as e:
+            messagebox.showerror("Błąd bazy", str(e))
+        except Exception as e:
+            messagebox.showerror("Błąd", str(e))
+
+    def clear_przyjecie_form(self):
+        self.przyjecia_material_combo.set("")
+        self.przyjecia_ilosc_entry.delete(0, tk.END)
+        self.przyjecia_data_entry.delete(0, tk.END)
+        self.przyjecia_data_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.przyjecia_magazyn_combo.set("")
+        self.przyjecia_dostawca_entry.delete(0, tk.END)
+        self.przyjecia_uwagi_text.delete("1.0", tk.END)
+
+    def refresh_przyjecia(self):
+        for item in self.przyjecia_tree.get_children():
+            self.przyjecia_tree.delete(item)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = (
+            "SELECT o.OperacjaID, m.Nazwa, o.Ilo, o.DataOperacji, mag.Kod, o.Dostawca, o.Uwagi "
+            "FROM OperacjeMagazynowe o "
+            "JOIN Materialy m ON o.MaterialID = m.MaterialID "
+            "JOIN Magazyny mag ON o.MagazynID = mag.MagazynID "
+            "WHERE o.TypOperacji IN ('Przyjcie', 'Przyjęcie') "
+            "ORDER BY o.DataOperacji DESC, o.OperacjaID DESC"
+        )
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            self.przyjecia_tree.insert("", "end", values=row)
+        conn.close()
+
+    # ------------------------------------------------------------------ WYDANIA
 
     def create_wydania_tab(self):
         self.wydania_frame = ttk.Frame(self.notebook)
@@ -365,7 +433,108 @@ class MagazynApp:
 
         self.wydania_tree.pack(fill="both", expand=True)
 
+    def add_wydanie(self):
+        try:
+            material_name = self.wydania_material_combo.get()
+            magazyn_name = self.wydania_magazyn_combo.get()
 
+            if not material_name:
+                raise ValueError("Proszę wybrać materiał.")
+            if not magazyn_name:
+                raise ValueError("Proszę wybrać magazyn.")
+
+            try:
+                ilosc = int(self.wydania_ilosc_entry.get())
+                if ilosc <= 0:
+                    raise ValueError
+            except ValueError:
+                raise ValueError("Ilość musi być poprawną liczbą całkowitą większą od zera.")
+
+            data = self.wydania_data_entry.get().strip()
+            datetime.strptime(data, "%Y-%m-%d")
+
+            material_id = self.materialy_dict[material_name]
+            magazyn_id = self.magazyny_dict[magazyn_name]
+            odbiorca = self.wydania_odbiorca_entry.get().strip()
+            uwagi = self.wydania_uwagi_text.get("1.0", "end-1c").strip()
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            sql_check = """
+                SELECT
+                    COALESCE(SUM(CASE WHEN TypOperacji IN ('Przyjcie', 'Przyjęcie') THEN Ilo ELSE 0 END), 0) -
+                    COALESCE(SUM(CASE WHEN TypOperacji = 'Wydanie' THEN Ilo ELSE 0 END), 0)
+                FROM OperacjeMagazynowe
+                WHERE MaterialID = ? AND MagazynID = ?
+            """
+            cursor.execute(sql_check, (material_id, magazyn_id))
+            dostepna_ilosc = cursor.fetchone()[0]
+
+            if dostepna_ilosc < ilosc:
+                conn.close()
+                raise ValueError(f"Niewystarczający stan magazynowy. Dostępna ilość: {dostepna_ilosc}")
+
+            sql_insert = """
+                INSERT INTO OperacjeMagazynowe
+                (MaterialID, MagazynID, TypOperacji, Ilo, DataOperacji, Dostawca, ZlecPracownika, Uwagi)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql_insert, (material_id, magazyn_id, "Wydanie", ilosc, data, odbiorca, None, uwagi))
+
+            sql_update_stan = """
+                UPDATE ProduktyLokalizacje
+                SET ilosc = ilosc - ?
+                WHERE id_produktu = ? AND id_lokalizacji IN (
+                    SELECT id_lokalizacji FROM LokalizacjeMagazynowe WHERE MagazynID = ?
+                )
+            """
+            cursor.execute(sql_update_stan, (ilosc, material_id, magazyn_id))
+
+            conn.commit()
+            conn.close()
+
+            messagebox.showinfo("Sukces", "Pomyślnie zarejestrowano wydanie.")
+            self.clear_wydanie_form()
+            self.refresh_wydania()
+            self.refresh_stan_zapasu()
+        except ValueError as e:
+            messagebox.showerror("Błąd walidacji", str(e))
+        except sqlite3.Error as e:
+            messagebox.showerror("Błąd bazy danych", str(e))
+        except Exception as e:
+            messagebox.showerror("Błąd", str(e))
+
+    def clear_wydanie_form(self):
+        self.wydania_material_combo.set("")
+        self.wydania_ilosc_entry.delete(0, tk.END)
+        self.wydania_data_entry.delete(0, tk.END)
+        self.wydania_data_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.wydania_magazyn_combo.set("")
+        self.wydania_odbiorca_entry.delete(0, tk.END)
+        self.wydania_uwagi_text.delete("1.0", tk.END)
+
+    def refresh_wydania(self):
+        for item in self.wydania_tree.get_children():
+            self.wydania_tree.delete(item)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = """
+            SELECT o.OperacjaID, m.Nazwa, o.Ilo, o.DataOperacji, mag.Kod, o.Dostawca, o.Uwagi
+            FROM OperacjeMagazynowe o
+            JOIN Materialy m ON o.MaterialID = m.MaterialID
+            JOIN Magazyny mag ON o.MagazynID = mag.MagazynID
+            WHERE o.TypOperacji = 'Wydanie'
+            ORDER BY o.DataOperacji DESC, o.OperacjaID DESC
+        """
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            self.wydania_tree.insert("", "end", values=row)
+        conn.close()
+        self.load_combobox_data()
+
+    # ------------------------------------------------------------------ KARTOTEKA
 
     def create_kartoteka_tab(self):
         self.kartoteka_frame = ttk.Frame(self.notebook)
@@ -384,26 +553,36 @@ class MagazynApp:
         self.mat_nazwa_entry = ttk.Entry(mat_form, width=30)
         self.mat_nazwa_entry.grid(row=0, column=1, pady=5, padx=5)
 
-        ttk.Label(mat_form, text="Jednostka:").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(mat_form, text="Indeks:").grid(row=1, column=0, sticky="w", pady=5)
+        self.mat_indeks_entry = ttk.Entry(mat_form, width=15)
+        self.mat_indeks_entry.grid(row=1, column=1, sticky="w", pady=5, padx=5)
+
+        ttk.Label(mat_form, text="Jednostka:").grid(row=2, column=0, sticky="w", pady=5)
         self.mat_jednostka_entry = ttk.Entry(mat_form, width=15)
-        self.mat_jednostka_entry.grid(row=1, column=1, sticky="w", pady=5, padx=5)
+        self.mat_jednostka_entry.grid(row=2, column=1, sticky="w", pady=5, padx=5)
 
-        ttk.Label(mat_form, text="Cena jedn. (PLN):").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(mat_form, text="Cena jedn. (PLN):").grid(row=3, column=0, sticky="w", pady=5)
         self.mat_cena_entry = ttk.Entry(mat_form, width=15)
-        self.mat_cena_entry.grid(row=2, column=1, sticky="w", pady=5, padx=5)
+        self.mat_cena_entry.grid(row=3, column=1, sticky="w", pady=5, padx=5)
 
-        ttk.Button(mat_form, text="Zapisz materiał", command=self.add_material).grid(row=3, column=1, sticky="e", pady=10)
+        ttk.Button(mat_form, text="Zapisz materiał", command=self.add_material).grid(row=4, column=1, sticky="e", pady=10)
 
         mat_table_frame = ttk.LabelFrame(material_frame, text="Lista materiałów", padding=10)
         mat_table_frame.pack(fill="both", expand=True, padx=(0, 5))
 
-        self.mat_tree = ttk.Treeview(mat_table_frame, columns=("ID", "Nazwa", "Jednostka", "Cena"), show="headings")
+        self.mat_tree = ttk.Treeview(
+            mat_table_frame,
+            columns=("ID", "Nazwa", "Indeks", "Jednostka", "Cena"),
+            show="headings"
+        )
         self.mat_tree.heading("ID", text="ID")
         self.mat_tree.heading("Nazwa", text="Nazwa")
+        self.mat_tree.heading("Indeks", text="Indeks")
         self.mat_tree.heading("Jednostka", text="J.m.")
         self.mat_tree.heading("Cena", text="Cena")
         self.mat_tree.column("ID", width=40, anchor="center")
         self.mat_tree.column("Nazwa", width=150)
+        self.mat_tree.column("Indeks", width=60, anchor="center")
         self.mat_tree.column("Jednostka", width=50, anchor="center")
         self.mat_tree.column("Cena", width=70, anchor="e")
         self.mat_tree.pack(fill="both", expand=True)
@@ -438,7 +617,98 @@ class MagazynApp:
 
         self.refresh_kartoteka()
 
+    def add_material(self):
+        nazwa = self.mat_nazwa_entry.get().strip()
+        indeks_str = self.mat_indeks_entry.get().strip()
+        jednostka = self.mat_jednostka_entry.get().strip()
+        cena_str = self.mat_cena_entry.get().strip().replace(',', '.')
 
+        if not nazwa or not indeks_str or not jednostka or not cena_str:
+            messagebox.showerror("Błąd", "Wszystkie pola muszą być wypełnione.")
+            return
+
+        try:
+            indeks = int(indeks_str)
+        except ValueError:
+            messagebox.showerror("Błąd", "Indeks musi być liczbą całkowitą.")
+            return
+
+        try:
+            cena = float(cena_str)
+            if cena < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Błąd", "Cena musi być poprawną liczbą dodatnią.")
+            return
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO Materialy (Nazwa, Indeks, Jednostka, Cenajedn) VALUES (?, ?, ?, ?)",
+                (nazwa, indeks, jednostka, cena)
+            )
+            conn.commit()
+            conn.close()
+
+            messagebox.showinfo("Sukces", "Materiał został dodany do bazy.")
+            self.mat_nazwa_entry.delete(0, tk.END)
+            self.mat_indeks_entry.delete(0, tk.END)
+            self.mat_jednostka_entry.delete(0, tk.END)
+            self.mat_cena_entry.delete(0, tk.END)
+
+            self.refresh_kartoteka()
+            self.load_combobox_data()
+        except sqlite3.Error as e:
+            messagebox.showerror("Błąd bazy danych", str(e))
+
+    def add_magazyn(self):
+        kod = self.mag_kod_entry.get().strip()
+        opis = self.mag_opis_entry.get().strip()
+
+        if not kod or not opis:
+            messagebox.showerror("Błąd", "Wszystkie pola muszą być wypełnione.")
+            return
+
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO Magazyny (Kod, Opis) VALUES (?, ?)", (kod, opis))
+            conn.commit()
+            conn.close()
+
+            messagebox.showinfo("Sukces", "Magazyn został dodany do bazy.")
+            self.mag_kod_entry.delete(0, tk.END)
+            self.mag_opis_entry.delete(0, tk.END)
+
+            self.refresh_kartoteka()
+            self.load_combobox_data()
+            self.update_stan_filter_combos()
+        except sqlite3.Error as e:
+            messagebox.showerror("Błąd bazy danych", str(e))
+
+    def refresh_kartoteka(self):
+        for item in self.mat_tree.get_children():
+            self.mat_tree.delete(item)
+        for item in self.mag_tree.get_children():
+            self.mag_tree.delete(item)
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT MaterialID, Nazwa, Indeks, Jednostka, Cenajedn FROM Materialy ORDER BY Nazwa")
+        for row in cursor.fetchall():
+            row_formatted = list(row)
+            row_formatted[4] = f"{row_formatted[4]:.2f}"
+            self.mat_tree.insert("", "end", values=row_formatted)
+
+        cursor.execute("SELECT MagazynID, Kod, Opis FROM Magazyny ORDER BY Kod")
+        for row in cursor.fetchall():
+            self.mag_tree.insert("", "end", values=row)
+
+        conn.close()
+
+    # ------------------------------------------------------------------ STAN ZAPASU
 
     def create_stan_zapasu_tab(self):
         self.stan_frame = ttk.Frame(self.notebook)
@@ -541,6 +811,7 @@ class MagazynApp:
 
         conn.close()
 
+    # ------------------------------------------------------------------ INWENTARYZACJA
 
     def create_inwentaryzacja_tab(self):
         self.inwentaryzacja_frame = ttk.Frame(self.notebook)
@@ -684,6 +955,7 @@ class MagazynApp:
             self.inv_tree.insert("", "end", values=row)
         conn.close()
 
+    # ------------------------------------------------------------------ RAPORTY
 
     def create_raporty_tab(self):
         self.raporty_frame = ttk.Frame(self.notebook)
@@ -726,7 +998,7 @@ class MagazynApp:
 
         ttk.Label(chart_controls, text="Typ operacji").grid(row=0, column=4, padx=4, pady=4, sticky="w")
         self.chart_type_combo = ttk.Combobox(chart_controls, state="readonly", width=14,
-                                             values=["Wszystkie", "Przyjcie", "Wydanie"])
+                                             values=["Wszystkie", "Przyjęcie", "Wydanie"])
         self.chart_type_combo.grid(row=0, column=5, padx=4, pady=4)
         self.chart_type_combo.set("Wszystkie")
 
@@ -768,7 +1040,6 @@ class MagazynApp:
             self.raporty_tree.column(col, width=widths[col], anchor="w")
         self.raporty_tree.pack(fill="both", expand=True)
 
-
     def load_combobox_data(self):
         conn = get_connection()
         cursor = conn.cursor()
@@ -794,276 +1065,6 @@ class MagazynApp:
             self.wydania_magazyn_combo["values"] = list(self.magazyny_dict.keys())
 
         conn.close()
-
-
-    def add_przyjecie(self):
-        try:
-            material_name = self.przyjecia_material_combo.get()
-            magazyn_name = self.przyjecia_magazyn_combo.get()
-
-            if not material_name:
-                messagebox.showerror("Błąd", "Wybierz materiał.")
-                return
-            if not magazyn_name:
-                messagebox.showerror("Błąd", "Wybierz magazyn.")
-                return
-
-            ilosc = int(self.przyjecia_ilosc_entry.get())
-            if ilosc <= 0:
-                raise ValueError("Ilość musi być większa od zera.")
-
-            data = self.przyjecia_data_entry.get().strip()
-            datetime.strptime(data, "%Y-%m-%d")
-
-            material_id = self.materialy_dict[material_name]
-            magazyn_id = self.magazyny_dict[magazyn_name]
-            dostawca = self.przyjecia_dostawca_entry.get().strip()
-            uwagi = self.przyjecia_uwagi_text.get("1.0", "end-1c").strip()
-
-            conn = get_connection()
-            cursor = conn.cursor()
-            sql = (
-                "INSERT INTO OperacjeMagazynowe "
-                "(MaterialID, MagazynID, TypOperacji, Ilo, DataOperacji, Dostawca, ZlecPracownika, Uwagi) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            cursor.execute(sql, (material_id, magazyn_id, "Przyjęcie", ilosc, data, dostawca, None, uwagi))
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Pomyślnie zarejestrowano przyjęcie.")
-            self.clear_przyjecie_form()
-            self.refresh_przyjecia()
-            self.refresh_stan_zapasu()
-        except ValueError as e:
-            messagebox.showerror("Błąd danych", str(e))
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy", str(e))
-        except Exception as e:
-            messagebox.showerror("Błąd", str(e))
-
-    def clear_przyjecie_form(self):
-        self.przyjecia_material_combo.set("")
-        self.przyjecia_ilosc_entry.delete(0, tk.END)
-        self.przyjecia_data_entry.delete(0, tk.END)
-        self.przyjecia_data_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.przyjecia_magazyn_combo.set("")
-        self.przyjecia_dostawca_entry.delete(0, tk.END)
-        self.przyjecia_uwagi_text.delete("1.0", tk.END)
-
-    def refresh_przyjecia(self):
-        for item in self.przyjecia_tree.get_children():
-            self.przyjecia_tree.delete(item)
-
-        conn = get_connection()
-        cursor = conn.cursor()
-        sql = (
-            "SELECT o.OperacjaID, m.Nazwa, o.Ilo, o.DataOperacji, mag.Kod, o.Dostawca, o.Uwagi "
-            "FROM OperacjeMagazynowe o "
-            "JOIN Materialy m ON o.MaterialID = m.MaterialID "
-            "JOIN Magazyny mag ON o.MagazynID = mag.MagazynID "
-            "WHERE o.TypOperacji IN ('Przyjcie', 'Przyjęcie') "
-            "ORDER BY o.DataOperacji DESC, o.OperacjaID DESC"
-        )
-        cursor.execute(sql)
-        for row in cursor.fetchall():
-            self.przyjecia_tree.insert("", "end", values=row)
-        conn.close()
-
-
-    def get_available_stock(self, material_id, magazyn_id):
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                COALESCE(SUM(CASE WHEN TypOperacji IN ('Przyjcie', 'Przyjęcie') THEN Ilo ELSE 0 END), 0) -
-                COALESCE(SUM(CASE WHEN TypOperacji = 'Wydanie' THEN Ilo ELSE 0 END), 0)
-            FROM OperacjeMagazynowe
-            WHERE MaterialID = ? AND MagazynID = ?
-            """,
-            (material_id, magazyn_id),
-        )
-        row = cur.fetchone()
-        conn.close()
-        return int(row[0] or 0)
-
-    def add_wydanie(self):
-        try:
-            material_name = self.wydania_material_combo.get()
-            magazyn_name = self.wydania_magazyn_combo.get()
-
-            if not material_name:
-                raise ValueError("Proszę wybrać materiał.")
-            if not magazyn_name:
-                raise ValueError("Proszę wybrać magazyn.")
-
-            try:
-                ilosc = int(self.wydania_ilosc_entry.get())
-                if ilosc <= 0:
-                    raise ValueError
-            except ValueError:
-                raise ValueError("Ilość musi być poprawną liczbą całkowitą większą od zera.")
-
-            data = self.wydania_data_entry.get().strip()
-            datetime.strptime(data, "%Y-%m-%d")
-
-            material_id = self.materialy_dict[material_name]
-            magazyn_id = self.magazyny_dict[magazyn_name]
-            odbiorca = self.wydania_odbiorca_entry.get().strip()
-            uwagi = self.wydania_uwagi_text.get("1.0", "end-1c").strip()
-
-            dostepna_ilosc = self.get_available_stock(material_id, magazyn_id)
-            if ilosc > dostepna_ilosc:
-                raise ValueError(
-                    f"Niewystarczający stan magazynowy. Dostępna ilość: {dostepna_ilosc}, próba wydania: {ilosc}."
-                )
-
-            conn = get_connection()
-            cursor = conn.cursor()
-
-            sql_insert = """
-                INSERT INTO OperacjeMagazynowe
-                (MaterialID, MagazynID, TypOperacji, Ilo, DataOperacji, Dostawca, ZlecPracownika, Uwagi)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            cursor.execute(sql_insert, (material_id, magazyn_id, "Wydanie", ilosc, data, odbiorca, None, uwagi))
-
-            sql_update_stan = """
-                UPDATE ProduktyLokalizacje
-                SET ilosc = ilosc - ?
-                WHERE id_produktu = ? AND id_lokalizacji IN (
-                    SELECT id_lokalizacji FROM LokalizacjeMagazynowe WHERE MagazynID = ?
-                )
-            """
-            cursor.execute(sql_update_stan, (ilosc, material_id, magazyn_id))
-
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Pomyślnie zarejestrowano wydanie.")
-            self.clear_wydanie_form()
-            self.refresh_wydania()
-            self.refresh_stan_zapasu()
-        except ValueError as e:
-            messagebox.showerror("Błąd walidacji", str(e))
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy danych", str(e))
-        except Exception as e:
-            messagebox.showerror("Błąd", str(e))
-
-    def clear_wydanie_form(self):
-        self.wydania_material_combo.set("")
-        self.wydania_ilosc_entry.delete(0, tk.END)
-        self.wydania_data_entry.delete(0, tk.END)
-        self.wydania_data_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.wydania_magazyn_combo.set("")
-        self.wydania_odbiorca_entry.delete(0, tk.END)
-        self.wydania_uwagi_text.delete("1.0", tk.END)
-
-    def refresh_wydania(self):
-        for item in self.wydania_tree.get_children():
-            self.wydania_tree.delete(item)
-
-        conn = get_connection()
-        cursor = conn.cursor()
-        sql = """
-            SELECT o.OperacjaID, m.Nazwa, o.Ilo, o.DataOperacji, mag.Kod, o.Dostawca, o.Uwagi
-            FROM OperacjeMagazynowe o
-            JOIN Materialy m ON o.MaterialID = m.MaterialID
-            JOIN Magazyny mag ON o.MagazynID = mag.MagazynID
-            WHERE o.TypOperacji = 'Wydanie'
-            ORDER BY o.DataOperacji DESC, o.OperacjaID DESC
-        """
-        cursor.execute(sql)
-        for row in cursor.fetchall():
-            self.wydania_tree.insert("", "end", values=row)
-        conn.close()
-        self.load_combobox_data()
-
-
-    def add_material(self):
-        nazwa = self.mat_nazwa_entry.get().strip()
-        jednostka = self.mat_jednostka_entry.get().strip()
-        cena_str = self.mat_cena_entry.get().strip().replace(',', '.')
-
-        if not nazwa or not jednostka or not cena_str:
-            messagebox.showerror("Błąd", "Wszystkie pola muszą być wypełnione.")
-            return
-
-        try:
-            cena = float(cena_str)
-            if cena < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Błąd", "Cena musi być poprawną liczbą dodatnią.")
-            return
-
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO Materialy (Nazwa, Jednostka, Cenajedn) VALUES (?, ?, ?)",
-                (nazwa, jednostka, cena)
-            )
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Materiał został dodany do bazy.")
-            self.mat_nazwa_entry.delete(0, tk.END)
-            self.mat_jednostka_entry.delete(0, tk.END)
-            self.mat_cena_entry.delete(0, tk.END)
-
-            self.refresh_kartoteka()
-            self.load_combobox_data()
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy danych", str(e))
-
-    def add_magazyn(self):
-        kod = self.mag_kod_entry.get().strip()
-        opis = self.mag_opis_entry.get().strip()
-
-        if not kod or not opis:
-            messagebox.showerror("Błąd", "Wszystkie pola muszą być wypełnione.")
-            return
-
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO Magazyny (Kod, Opis) VALUES (?, ?)", (kod, opis))
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Magazyn został dodany do bazy.")
-            self.mag_kod_entry.delete(0, tk.END)
-            self.mag_opis_entry.delete(0, tk.END)
-
-            self.refresh_kartoteka()
-            self.load_combobox_data()
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy danych", str(e))
-
-    def refresh_kartoteka(self):
-        for item in self.mat_tree.get_children():
-            self.mat_tree.delete(item)
-        for item in self.mag_tree.get_children():
-            self.mag_tree.delete(item)
-
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT MaterialID, Nazwa, Jednostka, Cenajedn FROM Materialy ORDER BY Nazwa")
-        for row in cursor.fetchall():
-            row_formatted = list(row)
-            row_formatted[3] = f"{row_formatted[3]:.2f}"
-            self.mat_tree.insert("", "end", values=row_formatted)
-
-        cursor.execute("SELECT MagazynID, Kod, Opis FROM Magazyny ORDER BY Kod")
-        for row in cursor.fetchall():
-            self.mag_tree.insert("", "end", values=row)
-
-        conn.close()
-
 
     def clear_report_table(self):
         for item in self.raporty_tree.get_children():
@@ -1348,11 +1349,13 @@ class MagazynApp:
             agg = "COUNT(o.OperacjaID)"
             ylabel = "Liczba operacji"
 
+        # Budowanie klauzuli WHERE z uwzględnieniem obu wariantów zapisu 'Przyjęcie'
         where_clause = ""
         params = []
-        if type_label in ("Przyjcie", "Wydanie"):
-            where_clause = "WHERE o.TypOperacji = ?"
-            params.append(type_label)
+        if type_label == "Wydanie":
+            where_clause = "WHERE o.TypOperacji = 'Wydanie'"
+        elif type_label == "Przyjęcie":
+            where_clause = "WHERE o.TypOperacji IN ('Przyjcie', 'Przyjęcie')"
 
         query = f"""
             SELECT {xexpr} AS x, {agg} AS y
@@ -1407,188 +1410,6 @@ class MagazynApp:
         widget.update_idletasks()
         self.chart_message.config(text=f"Wyświetlono wykres {self.chart_mode} dla: {metric_label} / {group_label}.")
         self.root.update_idletasks()
-
-    def add_wydanie(self):
-        try:
-            material_name = self.wydania_material_combo.get()
-            magazyn_name = self.wydania_magazyn_combo.get()
-
-            if not material_name:
-                raise ValueError("Proszę wybrać materiał.")
-            if not magazyn_name:
-                raise ValueError("Proszę wybrać magazyn.")
-
-            try:
-                ilosc = int(self.wydania_ilosc_entry.get())
-                if ilosc <= 0:
-                    raise ValueError
-            except ValueError:
-                raise ValueError("Ilość musi być poprawną liczbą całkowitą większą od zera.")
-
-            data = self.wydania_data_entry.get().strip()
-            datetime.strptime(data, "%Y-%m-%d")
-
-            material_id = self.materialy_dict[material_name]
-            magazyn_id = self.magazyny_dict[magazyn_name]
-            odbiorca = self.wydania_odbiorca_entry.get().strip()
-            uwagi = self.wydania_uwagi_text.get("1.0", "end-1c").strip()
-
-            conn = get_connection()
-            cursor = conn.cursor()
-
-            sql_check = """
-                SELECT 
-                    COALESCE(SUM(CASE WHEN TypOperacji IN ('Przyjcie', 'Przyjęcie') THEN Ilo ELSE 0 END), 0) -
-                    COALESCE(SUM(CASE WHEN TypOperacji = 'Wydanie' THEN Ilo ELSE 0 END), 0)
-                FROM OperacjeMagazynowe
-                WHERE MaterialID = ? AND MagazynID = ?
-            """
-            cursor.execute(sql_check, (material_id, magazyn_id))
-            dostepna_ilosc = cursor.fetchone()[0]
-
-            if dostepna_ilosc < ilosc:
-                conn.close()
-                raise ValueError(f"Niewystarczający stan magazynowy. Dostępna ilość: {dostepna_ilosc}")
-
-            sql_insert = """
-                INSERT INTO OperacjeMagazynowe 
-                (MaterialID, MagazynID, TypOperacji, Ilo, DataOperacji, Dostawca, ZlecPracownika, Uwagi) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            cursor.execute(sql_insert, (material_id, magazyn_id, "Wydanie", ilosc, data, odbiorca, None, uwagi))
-            
-            sql_update_stan = """
-                UPDATE ProduktyLokalizacje 
-                SET ilosc = ilosc - ? 
-                WHERE id_produktu = ? AND id_lokalizacji IN (
-                    SELECT id_lokalizacji FROM LokalizacjeMagazynowe WHERE MagazynID = ?
-                )
-            """
-            cursor.execute(sql_update_stan, (ilosc, material_id, magazyn_id))
-
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Pomyślnie zarejestrowano wydanie.")
-            self.clear_wydanie_form()
-            self.refresh_wydania()
-            self.refresh_stan_zapasu()
-        except ValueError as e:
-            messagebox.showerror("Błąd walidacji", str(e))
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy danych", str(e))
-        except Exception as e:
-            messagebox.showerror("Błąd", str(e))
-
-    def clear_wydanie_form(self):
-        self.wydania_material_combo.set("")
-        self.wydania_ilosc_entry.delete(0, tk.END)
-        self.wydania_data_entry.delete(0, tk.END)
-        self.wydania_data_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.wydania_magazyn_combo.set("")
-        self.wydania_odbiorca_entry.delete(0, tk.END)
-        self.wydania_uwagi_text.delete("1.0", tk.END)
-
-    def refresh_wydania(self):
-        for item in self.wydania_tree.get_children():
-            self.wydania_tree.delete(item)
-
-        conn = get_connection()
-        cursor = conn.cursor()
-        sql = """
-            SELECT o.OperacjaID, m.Nazwa, o.Ilo, o.DataOperacji, mag.Kod, o.Dostawca, o.Uwagi 
-            FROM OperacjeMagazynowe o 
-            JOIN Materialy m ON o.MaterialID = m.MaterialID 
-            JOIN Magazyny mag ON o.MagazynID = mag.MagazynID 
-            WHERE o.TypOperacji = 'Wydanie' 
-            ORDER BY o.DataOperacji DESC, o.OperacjaID DESC
-        """
-        cursor.execute(sql)
-
-        for row in cursor.fetchall():
-            self.wydania_tree.insert("", "end", values=row)
-
-        conn.close()
-        self.load_combobox_data()
-
-    def add_material(self):
-        nazwa = self.mat_nazwa_entry.get().strip()
-        jednostka = self.mat_jednostka_entry.get().strip()
-        cena_str = self.mat_cena_entry.get().strip().replace(',', '.')
-
-        if not nazwa or not jednostka or not cena_str:
-            messagebox.showerror("Błąd", "Wszystkie pola muszą być wypełnione.")
-            return
-
-        try:
-            cena = float(cena_str)
-            if cena < 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Błąd", "Cena musi być poprawną liczbą dodatnią.")
-            return
-
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO Materialy (Nazwa, Jednostka, Cenajedn) VALUES (?, ?, ?)", (nazwa, jednostka, cena))
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Materiał został dodany do bazy.")
-            self.mat_nazwa_entry.delete(0, tk.END)
-            self.mat_jednostka_entry.delete(0, tk.END)
-            self.mat_cena_entry.delete(0, tk.END)
-            
-            self.refresh_kartoteka()
-            self.load_combobox_data()
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy danych", str(e))
-
-    def add_magazyn(self):
-        kod = self.mag_kod_entry.get().strip()
-        opis = self.mag_opis_entry.get().strip()
-
-        if not kod or not opis:
-            messagebox.showerror("Błąd", "Wszystkie pola muszą być wypełnione.")
-            return
-
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO Magazyny (Kod, Opis) VALUES (?, ?)", (kod, opis))
-            conn.commit()
-            conn.close()
-
-            messagebox.showinfo("Sukces", "Magazyn został dodany do bazy.")
-            self.mag_kod_entry.delete(0, tk.END)
-            self.mag_opis_entry.delete(0, tk.END)
-            
-            self.refresh_kartoteka()
-            self.load_combobox_data()
-        except sqlite3.Error as e:
-            messagebox.showerror("Błąd bazy danych", str(e))
-
-    def refresh_kartoteka(self):
-        for item in self.mat_tree.get_children():
-            self.mat_tree.delete(item)
-        for item in self.mag_tree.get_children():
-            self.mag_tree.delete(item)
-
-        conn = get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT MaterialID, Nazwa, Jednostka, Cenajedn FROM Materialy ORDER BY Nazwa")
-        for row in cursor.fetchall():
-            row_formatted = list(row)
-            row_formatted[3] = f"{row_formatted[3]:.2f}"
-            self.mat_tree.insert("", "end", values=row_formatted)
-
-        cursor.execute("SELECT MagazynID, Kod, Opis FROM Magazyny ORDER BY Kod")
-        for row in cursor.fetchall():
-            self.mag_tree.insert("", "end", values=row)
-
-        conn.close()
 
 
 if __name__ == "__main__":

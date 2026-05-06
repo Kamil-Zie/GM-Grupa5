@@ -83,7 +83,7 @@ CREATE TABLE OperacjeMagazynowe (
     OperacjaID INTEGER PRIMARY KEY AUTOINCREMENT,
     MaterialID INTEGER NOT NULL,
     MagazynID INTEGER NOT NULL,
-    TypOperacji TEXT NOT NULL CHECK (TypOperacji IN ('Przyjcie', 'Wydanie')),
+    TypOperacji TEXT NOT NULL CHECK (TypOperacji IN ('Przyjcie', 'Przyjęcie', 'Wydanie')),
     Ilo INTEGER NOT NULL CHECK (Ilo > 0),
     DataOperacji DATE NOT NULL,
     Dostawca TEXT,
@@ -98,11 +98,7 @@ CREATE TABLE OperacjeMagazynowe (
     FOREIGN KEY (id_pracownika) REFERENCES Pracownicy(id_pracownika),
     FOREIGN KEY (id_dostawcy) REFERENCES Dostawcy(id_dostawcy),
     FOREIGN KEY (KontoID) REFERENCES KontaKosztowe(KontoID),
-    FOREIGN KEY (id_lokalizacji) REFERENCES LokalizacjeMagazynowe(id_lokalizacji),
-    CHECK (
-        (TypOperacji = 'Przyjcie' AND id_dostawcy IS NOT NULL)
-        OR (TypOperacji = 'Wydanie')
-    )
+    FOREIGN KEY (id_lokalizacji) REFERENCES LokalizacjeMagazynowe(id_lokalizacji)
 );
 
 CREATE TABLE StanZapasu (
