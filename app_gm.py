@@ -644,6 +644,11 @@ class MagazynApp:
         try:
             conn = get_connection()
             cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM Materialy WHERE Indeks = ?", (indeks,))
+            if cursor.fetchone() is not None:
+                conn.close()
+                messagebox.showerror("Błąd", f"Materiał z indeksem {indeks} już istnieje. Podaj inny indeks.")
+                return
             cursor.execute(
                 "INSERT INTO Materialy (Nazwa, Indeks, Jednostka, Cenajedn) VALUES (?, ?, ?, ?)",
                 (nazwa, indeks, jednostka, cena)
@@ -673,6 +678,11 @@ class MagazynApp:
         try:
             conn = get_connection()
             cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM Magazyny WHERE Kod = ?", (kod,))
+            if cursor.fetchone() is not None:
+                conn.close()
+                messagebox.showerror("Błąd", f"Magazyn z kodem '{kod}' już istnieje. Podaj inny kod.")
+                return
             cursor.execute("INSERT INTO Magazyny (Kod, Opis) VALUES (?, ?)", (kod, opis))
             conn.commit()
             conn.close()
